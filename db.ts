@@ -22,12 +22,6 @@ export function getDb(): Database.Database {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');
-    // Migrate existing DBs missing the JSON columns
-    const cols = db.prepare("PRAGMA table_info(videos)").all() as any[];
-    const colNames = cols.map(c => c.name);
-    if (!colNames.includes('chapters')) db.exec('ALTER TABLE videos ADD COLUMN chapters TEXT');
-    if (!colNames.includes('links')) db.exec('ALTER TABLE videos ADD COLUMN links TEXT');
-    if (!colNames.includes('screenshots')) db.exec('ALTER TABLE videos ADD COLUMN screenshots TEXT');
     db.exec(`
       CREATE TABLE IF NOT EXISTS channels (
         channel_id TEXT PRIMARY KEY,
@@ -58,6 +52,12 @@ export function getDb(): Database.Database {
       CREATE INDEX IF NOT EXISTS idx_videos_channel ON videos(channel_id, published_at DESC);
       CREATE INDEX IF NOT EXISTS idx_videos_published ON videos(published_at DESC);
     `);
+    // Migrate existing DBs missing the JSON columns
+    const cols = db.prepare("PRAGMA table_info(videos)").all() as any[];
+    const colNames = cols.map(c => c.name);
+    if (!colNames.includes('chapters')) db.exec('ALTER TABLE videos ADD COLUMN chapters TEXT');
+    if (!colNames.includes('links')) db.exec('ALTER TABLE videos ADD COLUMN links TEXT');
+    if (!colNames.includes('screenshots')) db.exec('ALTER TABLE videos ADD COLUMN screenshots TEXT');
   }
   return db;
 }

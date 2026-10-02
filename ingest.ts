@@ -12,6 +12,7 @@ import * as fs from 'fs';
 import { fileURLToPath } from 'url';
 import { getDb, upsertChannel, upsertVideo, upsertTranscript, hasVideo, getTranscript, setLinks, setChapters, closeDb } from './db.ts';
 import type { Chapter, Link } from './db.ts';
+import { captureScreenshots } from './screenshots.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHANNELS_FILE = path.join(__dirname, 'channels.json');
@@ -190,11 +191,21 @@ function ingestVideo(videoId: string, channelId: string, title: string, publishe
   upsertVideo(videoId, channelId, title, publishedAt);
 
   // Fetch chapters from yt-dlp metadata (non-fatal if unavailable)
+  let chapters: Chapter[] = [];
   const json = fetchVideoJson(videoId);
   if (json) {
-    const chapters = extractChapters(json);
+    chapters = extractChapters(json);
     setChapters(videoId, chapters);
     if (chapters.length > 0) console.log(`    Chapters: ${chapters.length}`);
+  }
+
+  // Capture screenshots at chapter timestamps (non-fatal)
+  if (chapters.length > 0) {
+    try {
+      captureScreenshots(videoId);
+    } catch (e: any) {
+      console.warn(`    Screenshot capture failed: ${e.message?.slice(0, 100)}`);
+    }
   }
 
   // Skip transcript fetch if we already have it
