@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Global pre-push guard: secret scan + suspicious-file check. Fail-closed.
+# Installed via: git config --global core.hooksPath ~/.git-hooks
+set -u
+ZERO=0000000000000000000000000000000000000000
+PATTERNS='sk-ant-[A-Za-z0-9_-]{10,}|sk-proj-[A-Za-z0-9_-]{10,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}|ghu_[A-Za-z0-9]{20,}|ghs_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|hf_[A-Za-z0-9]{20,}|AIza[0-9A-Za-z_-]{30,}|xox[baprs]-[A-Za-z0-9-]{10,}|BEGIN [A-Z ]*PRIVATE KEY|aws_secret_access_key[^A-Za-z0-9]{0,3}[A-Za-z0-9/+=]{40}'
+BAD_NAMES='(^|/)\.env($|\.)|\.pem$|\.p12$|\.pfx$|id_rsa($|\.pub$)|id_ed25519$|.*credentials.*\.json$|.*\.sqlite(-wal|-shm)?$|\.gpg$|\.keystore$|npm-debug\.log$'
+
+hits=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$ZERO" ] && continue          # branch deletion
+  if [ "$remote_sha" = "$ZERO" ]; then
+    range="$local_sha"                            # new ref: scan whole thing vs empty tree
+    diff_cmd=(git diff --unified=0 "$ZERO" "$local_sha")
+    files_cmd=(git diff --name-only --diff-filter=A "$ZERO" "$local_sha")
+  else
+    diff_cmd=(git diff --unified=0 "$remote_sha" "$local_sha")
+    files_cmd=(git diff --name-only --diff-filter=A "$remote_sha" "$local_sha")
+  fi
+
+  # 1) secret patterns in ADDED lines
+  if "${diff_cmd[@]}" 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+' | grep -inE "$PATTERNS"; then
+    echo "pre-push: SECRET PATTERN in ${local_ref#refs/heads/} (line above, redact before sharing)"
+    hits=1
+  fi
+  # 2) suspicious files being added
+  if "${files_cmd[@]}" 2>/dev/null | grep -E "$BAD_NAMES"; then
+    echo "pre-push: SUSPICIOUS FILE added to ${local_ref#refs/heads/} (should be gitignored?)"
+    hits=1
+  fi
+done
+if [ "$hits" -ne 0 ]; then
+  echo "pre-push: PUSH BLOCKED. Bypass only with explicit human approval: git push --no-verify"
+  exit 1
+fi
+exit 0
+
+# --- BEGIN BEADS INTEGRATION v1.2.2 ---
+# This section is managed by beads. Do not remove these markers.
+if command -v bd >/dev/null 2>&1; then
+  export BD_GIT_HOOK=1
+  _bd_timeout=${BEADS_HOOK_TIMEOUT:-300}
+  _bd_used_perl=0
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$_bd_timeout" bd hooks run pre-push "$@"
+    _bd_exit=$?
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$_bd_timeout" bd hooks run pre-push "$@"
+    _bd_exit=$?
+  elif command -v perl >/dev/null 2>&1; then
+    _bd_used_perl=1
+    perl -e 'alarm shift; exec @ARGV' "$_bd_timeout" bd hooks run pre-push "$@"
+    _bd_exit=$?
+  else
+    echo >&2 "beads: hook 'pre-push' running without timeout; install coreutils or perl to enable BEADS_HOOK_TIMEOUT"
+    bd hooks run pre-push "$@"
+    _bd_exit=$?
+  fi
+  if [ $_bd_exit -eq 124 ] || { [ $_bd_used_perl -eq 1 ] && [ $_bd_exit -eq 142 ]; }; then
+    echo >&2 "beads: hook 'pre-push' timed out after ${_bd_timeout}s — continuing without beads"
+    _bd_exit=0
+  fi
+  if [ $_bd_exit -eq 3 ]; then
+    echo >&2 "beads: database not initialized — skipping hook 'pre-push'"
+    _bd_exit=0
+  fi
+  if [ $_bd_exit -ne 0 ]; then exit $_bd_exit; fi
+fi
+# --- END BEADS INTEGRATION v1.2.2 ---

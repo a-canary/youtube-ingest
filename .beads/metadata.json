@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "youtube_ingest",
+  "project_id": "dffcf6ef-8657-4e69-b291-a6eea61d98c1"
+}
