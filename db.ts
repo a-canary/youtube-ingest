@@ -11,6 +11,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, 'data');
 const DB_PATH = path.join(DATA_DIR, 'youtube.db');
 
+export interface Chapter { start_seconds: number; title: string; }
+export interface Link { url: string; type: string; title?: string; }
+export interface Screenshot { timestamp: number; path: string; }
+
 let db: Database.Database;
 
 export function getDb(): Database.Database {
@@ -18,6 +22,12 @@ export function getDb(): Database.Database {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     db = new Database(DB_PATH);
     db.pragma('journal_mode = WAL');
+    // Migrate existing DBs missing the JSON columns
+    const cols = db.prepare("PRAGMA table_info(videos)").all() as any[];
+    const colNames = cols.map(c => c.name);
+    if (!colNames.includes('chapters')) db.exec('ALTER TABLE videos ADD COLUMN chapters TEXT');
+    if (!colNames.includes('links')) db.exec('ALTER TABLE videos ADD COLUMN links TEXT');
+    if (!colNames.includes('screenshots')) db.exec('ALTER TABLE videos ADD COLUMN screenshots TEXT');
     db.exec(`
       CREATE TABLE IF NOT EXISTS channels (
         channel_id TEXT PRIMARY KEY,
@@ -31,8 +41,12 @@ export function getDb(): Database.Database {
         channel_id TEXT NOT NULL REFERENCES channels(channel_id),
         title TEXT NOT NULL,
         published_at TEXT NOT NULL,
+        chapters TEXT,
+        links TEXT,
+        screenshots TEXT,
         fetched_at TEXT DEFAULT (datetime('now'))
       );
+
 
       CREATE TABLE IF NOT EXISTS transcripts (
         video_id TEXT PRIMARY KEY REFERENCES videos(video_id),
@@ -101,6 +115,28 @@ export function getRecentVideos(channelId: string, days: number): Array<{ video_
     WHERE v.channel_id = ? AND v.published_at >= ?
     ORDER BY v.published_at DESC
   `).all(channelId, cutoff) as any[];
+}
+
+export function getChapters(videoId: string): Chapter[] {
+  const row = getDb().prepare('SELECT chapters FROM videos WHERE video_id = ?').get(videoId) as any;
+  return row?.chapters ? JSON.parse(row.chapters) : [];
+}
+export function setChapters(videoId: string, chapters: Chapter[]): void {
+  getDb().prepare('UPDATE videos SET chapters = ? WHERE video_id = ?').run(JSON.stringify(chapters), videoId);
+}
+export function getLinks(videoId: string): Link[] {
+  const row = getDb().prepare('SELECT links FROM videos WHERE video_id = ?').get(videoId) as any;
+  return row?.links ? JSON.parse(row.links) : [];
+}
+export function setLinks(videoId: string, links: Link[]): void {
+  getDb().prepare('UPDATE videos SET links = ? WHERE video_id = ?').run(JSON.stringify(links), videoId);
+}
+export function getScreenshots(videoId: string): Screenshot[] {
+  const row = getDb().prepare('SELECT screenshots FROM videos WHERE video_id = ?').get(videoId) as any;
+  return row?.screenshots ? JSON.parse(row.screenshots) : [];
+}
+export function setScreenshots(videoId: string, screenshots: Screenshot[]): void {
+  getDb().prepare('UPDATE videos SET screenshots = ? WHERE video_id = ?').run(JSON.stringify(screenshots), videoId);
 }
 
 export function closeDb(): void {
