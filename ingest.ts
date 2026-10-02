@@ -10,7 +10,8 @@ import { execFileSync } from 'node:child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { fileURLToPath } from 'url';
-import { getDb, upsertChannel, upsertVideo, upsertTranscript, hasVideo, getTranscript, setLinks, Link, closeDb } from './db.ts';
+import { getDb, upsertChannel, upsertVideo, upsertTranscript, hasVideo, getTranscript, setLinks, setChapters, closeDb } from './db.ts';
+import type { Chapter, Link } from './db.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHANNELS_FILE = path.join(__dirname, 'channels.json');
@@ -39,6 +40,31 @@ function ytDlp(args: string[]): string {
     });
   } catch (e: any) {
     throw new Error(`yt-dlp failed: ${e.stderr || e.message}`);
+  }
+}
+
+/** Extract chapters from yt-dlp --dump-json metadata. */
+export function extractChapters(json: string): Chapter[] {
+  try {
+    const meta = JSON.parse(json);
+    if (!meta.chapters || !Array.isArray(meta.chapters)) return [];
+    return meta.chapters
+      .filter((c: any) => c.start_time !== undefined && c.title)
+      .map((c: any) => ({ start_seconds: c.start_time, title: c.title }));
+  } catch {
+    return [];
+  }
+}
+
+/** Fetch video metadata JSON via yt-dlp --dump-json. */
+function fetchVideoJson(videoId: string): string | null {
+  try {
+    return ytDlp([
+      '--no-update', '--no-warnings', '--skip-download', '--dump-json',
+      `https://www.youtube.com/watch?v=${videoId}`,
+    ]);
+  } catch {
+    return null;
   }
 }
 
@@ -162,6 +188,14 @@ function ingestVideo(videoId: string, channelId: string, title: string, publishe
 
   // Always upsert the video metadata (idempotent)
   upsertVideo(videoId, channelId, title, publishedAt);
+
+  // Fetch chapters from yt-dlp metadata (non-fatal if unavailable)
+  const json = fetchVideoJson(videoId);
+  if (json) {
+    const chapters = extractChapters(json);
+    setChapters(videoId, chapters);
+    if (chapters.length > 0) console.log(`    Chapters: ${chapters.length}`);
+  }
 
   // Skip transcript fetch if we already have it
   if (getTranscript(videoId)) {
