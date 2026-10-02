@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import { fileURLToPath } from 'url';
-import { getDb, upsertChannel, upsertVideo, upsertTranscript, hasVideo, getTranscript, closeDb } from './db.ts';
+import { getDb, upsertChannel, upsertVideo, upsertTranscript, hasVideo, getTranscript, setLinks, Link, closeDb } from './db.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHANNELS_FILE = path.join(__dirname, 'channels.json');
@@ -183,8 +183,62 @@ function ingestVideo(videoId: string, channelId: string, title: string, publishe
     console.log(`    No transcript available (will retry next run)`);
   }
 
+  // Extract and store links from description
+  try {
+    const description = fetchDescription(videoId);
+    if (description) {
+      const links = extractAndClassifyLinks(description);
+      if (links.length > 0) {
+        setLinks(videoId, links);
+        console.log(`    Links: ${links.length}`);
+      }
+    }
+  } catch (e: any) {
+    console.warn(`    Link extraction failed: ${e.message?.slice(0, 100)}`);
+  }
+
   // Rate limit: sleep between transcript fetches
   sleep(15000);
+}
+
+/** Extract URLs from text. */
+export function extractUrls(text: string): string[] {
+  return text.match(/https?:\/\/[\S]+/g) ?? [];
+}
+
+/** Classify a URL by type. */
+export function classifyUrl(url: string): string {
+  if (url.includes('github.com')) return 'github';
+  if (url.includes('arxiv.org')) return 'arxiv';
+  if (url.includes('/docs/') || url.includes('docs.')) return 'docs';
+  return 'promo';
+}
+
+/** Extract, dedupe, and classify links from video description. */
+export function extractAndClassifyLinks(description: string): Link[] {
+  const urls = extractUrls(description);
+  const seen = new Set<string>();
+  const links: Link[] = [];
+  for (const url of urls) {
+    if (seen.has(url)) continue;
+    seen.add(url);
+    links.push({ url, type: classifyUrl(url) });
+  }
+  return links;
+}
+
+/** Fetch video description via yt-dlp. */
+function fetchDescription(videoId: string): string | null {
+  try {
+    const output = execFileSync('yt-dlp', [
+      '--no-update', '--no-warnings', '--skip-download',
+      '--print', '%(description)s',
+      `https://www.youtube.com/watch?v=${videoId}`,
+    ], { encoding: 'utf8', timeout: 30000, env: { ...process.env, PATH: `/home/aaron/.local/bin:${process.env.PATH}` } });
+    return output.trim();
+  } catch {
+    return null;
+  }
 }
 
 function sleep(ms: number): void {
@@ -251,8 +305,12 @@ async function main() {
   closeDb();
 }
 
-main().catch(e => {
+// Run main only when executed directly, not when imported
+const isMain = process.argv[1] && (process.argv[1].endsWith('ingest.ts') || process.argv[1].endsWith('ingest.js'));
+if (isMain) {
+  main().catch(e => {
   console.error(`[youtube-ingest] Fatal: ${e.message}`);
   closeDb();
   process.exit(1);
 });
+}
