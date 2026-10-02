@@ -1,0 +1,14 @@
+{
+  "name": "youtube-ingest",
+  "version": "1.0.0",
+  "description": "Shared YouTube transcript ingestion service",
+  "type": "module",
+  "dependencies": {
+    "better-sqlite3": "^11.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0"
+  }
+}
