@@ -129,16 +129,22 @@ function fetchTranscriptYtDlp(videoId: string): string | null {
     execFileSync('yt-dlp', [
       '--no-update', '--no-warnings', '--skip-download',
       '--write-auto-subs', '--sub-langs', 'en',
-      '--sub-format', 'vtt', '--convert-subs', 'srt',
+      '--sub-format', 'vtt',
       '-o', `${tmpDir}/%(id)s.%(ext)s`,
       `https://www.youtube.com/watch?v=${videoId}`,
     ], { timeout: 60000 });
 
     const files = fs.readdirSync(tmpDir);
-    const srtFile = files.find(f => f.endsWith('.en.srt') || f.endsWith('.srt'));
-    if (!srtFile) return null;
+    const vttFile = files.find(f => f.endsWith('.en.vtt') || f.endsWith('.vtt'));
+    if (!vttFile) return null;
 
-    return fs.readFileSync(path.join(tmpDir, srtFile), 'utf8').trim();
+    // Clean VTT: dedupe rolling captions, strip tags, format as [MM:SS] text
+    const cleaned = execFileSync('python3', [
+      path.join(__dirname, 'clean_vtt.py'),
+      path.join(tmpDir, vttFile)
+    ], { timeout: 10000 }).toString().trim();
+
+    return cleaned || null;
   } catch (e: any) {
     console.warn(`  [transcript] yt-dlp fallback failed for ${videoId}: ${e.stderr?.slice(0, 200)}`);
     return null;
