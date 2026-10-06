@@ -13,6 +13,7 @@ import { fileURLToPath } from 'url';
 import { getDb, upsertChannel, upsertVideo, upsertTranscript, hasVideo, getTranscript, setLinks, setChapters, closeDb } from './db.ts';
 import type { Chapter, Link } from './db.ts';
 import { captureScreenshots } from './screenshots.ts';
+import { transcribeVideo } from './transcribe.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CHANNELS_FILE = path.join(__dirname, 'channels.json');
@@ -181,7 +182,7 @@ function fetchTranscriptYtDlp(videoId: string): string | null {
 }
 
 /** Ingest a single video: fetch metadata + transcript, store in DB. */
-function ingestVideo(videoId: string, channelId: string, title: string, publishedAt: string, dryRun: boolean): void {
+async function ingestVideo(videoId: string, channelId: string, title: string, publishedAt: string, dryRun: boolean): Promise<void> {
   if (dryRun) {
     console.log(`  [dry-run] Would ingest ${videoId}: ${title}`);
     return;
@@ -215,10 +216,14 @@ function ingestVideo(videoId: string, channelId: string, title: string, publishe
 
   console.log(`  Fetching transcript ${videoId}: ${title}`);
 
-  // Fetch transcript (Python API first, then yt-dlp fallback)
+  // Fetch transcript: Python API → yt-dlp → STT (whisper via 9router)
   let transcript = fetchTranscriptPython(videoId);
   if (!transcript) {
     transcript = fetchTranscriptYtDlp(videoId);
+  }
+  if (!transcript && process.env.ENABLE_STT === 'true') {
+    console.log(`    Trying STT transcription...`);
+    transcript = await transcribeVideo(videoId);
   }
 
   if (transcript) {
@@ -291,7 +296,7 @@ function sleep(ms: number): void {
   while (Date.now() < end) { /* spin */ }
 }
 
-function ingestChannel(channel: ChannelConfig, dryRun: boolean): number {
+async function ingestChannel(channel: ChannelConfig, dryRun: boolean): Promise<number> {
   // Resolve handle to channel ID if needed
   let channelId = channel.channel_id;
   if (!channelId.startsWith('UC')) {
@@ -318,7 +323,7 @@ function ingestChannel(channel: ChannelConfig, dryRun: boolean): number {
   console.log(`  Found ${videos.length} recent videos`);
   let ingested = 0;
   for (const v of videos) {
-    ingestVideo(v.video_id, channelId, v.title, v.published_at, dryRun);
+    await ingestVideo(v.video_id, channelId, v.title, v.published_at, dryRun);
     ingested++;
   }
   return ingested;
@@ -340,7 +345,7 @@ async function main() {
   let totalVideos = 0;
   for (const ch of filtered) {
     try {
-      totalVideos += ingestChannel(ch, dryRun);
+      totalVideos += await ingestChannel(ch, dryRun);
     } catch (e: any) {
       console.error(`  Error ingesting ${ch.handle}: ${e.message.slice(0, 200)}`);
     }
